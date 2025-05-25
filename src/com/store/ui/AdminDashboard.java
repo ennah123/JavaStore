@@ -49,7 +49,7 @@ public class AdminDashboard extends JFrame {
     }
 
     private void openOrderManagement() {
-        JOptionPane.showMessageDialog(this, "Open Order Management");
+        new OrderManagement();
     }
 
     private void openDiscountManagement() {
