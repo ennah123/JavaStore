@@ -53,7 +53,7 @@ public class AdminDashboard extends JFrame {
     }
 
     private void openDiscountManagement() {
-        JOptionPane.showMessageDialog(this, "Open Discount Management");
+        new DiscountManagement();
     }
 
     private void logout() {
