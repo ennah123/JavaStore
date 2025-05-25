@@ -45,7 +45,7 @@ public class AdminDashboard extends JFrame {
     }
 
     private void openProductManagement() {
-        JOptionPane.showMessageDialog(this, "Open Product Management");
+        new ProductManagement();
     }
 
     private void openOrderManagement() {
