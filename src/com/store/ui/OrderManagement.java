@@ -244,22 +244,19 @@ public class OrderManagement extends JFrame {
     private void updateProductStock(int orderId, boolean isAccepting) {
         String sql = """
             UPDATE p
-            SET p.stock = p.stock + (? * oi.quantity)
+            SET p.stock = p.stock + CASE WHEN ? = 1 THEN -oi.quantity ELSE oi.quantity END
             FROM products p
             JOIN order_items oi ON p.id = oi.product_id
             WHERE oi.order_id = ?
         """;
-
+    
         try (Connection conn = Database.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            // If accepting order, subtract from stock (multiply by -1)
-            // If rejecting order, add back to stock (multiply by 1)
-            int multiplier = isAccepting ? -1 : 1;
-            stmt.setInt(1, multiplier);
+    
+            stmt.setInt(1, isAccepting ? 1 : 0); // 1 for accept, 0 for deny
             stmt.setInt(2, orderId);
             stmt.executeUpdate();
-
+    
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error updating product stock: " + e.getMessage());
         }

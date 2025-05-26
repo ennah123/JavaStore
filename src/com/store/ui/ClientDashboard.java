@@ -253,11 +253,11 @@ public class ClientDashboard extends JFrame {
             }
     
             String insertItemSql = "INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?)";
-            String updateStockSql = "UPDATE products SET stock = stock - ? WHERE id = ?";
+            // String updateStockSql = "UPDATE products SET stock = stock - ? WHERE id = ?";
+            //  PreparedStatement psStock = conn.prepareStatement(updateStockSql);
     
             for (CartItem item : cart.values()) {
-                try (PreparedStatement psItem = conn.prepareStatement(insertItemSql);
-                     PreparedStatement psStock = conn.prepareStatement(updateStockSql)) {
+                try (PreparedStatement psItem = conn.prepareStatement(insertItemSql)) {
     
                     BigDecimal priceToUse = item.price;
                     if (discountPercentage.compareTo(BigDecimal.ZERO) > 0) {
@@ -270,9 +270,9 @@ public class ClientDashboard extends JFrame {
                     psItem.setBigDecimal(4, priceToUse);
                     psItem.executeUpdate();
     
-                    psStock.setInt(1, item.quantity);
-                    psStock.setInt(2, item.productId);
-                    psStock.executeUpdate();
+                    // psStock.setInt(1, item.quantity);
+                    // psStock.setInt(2, item.productId);
+                    // psStock.executeUpdate();
                 }
             }
     
