@@ -5,23 +5,35 @@ import com.store.db.Database;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.sql.*;
 
 public class ProductManagement extends JFrame {
     private JTable table;
     private DefaultTableModel model;
     private JTextField nameField, descField, priceField, stockField, filterField;
-    private JButton addBtn, updateBtn, deleteBtn, filterBtn;
+    private JButton addBtn, updateBtn, deleteBtn, filterBtn, selectImageBtn;
+    private JLabel imageLabel;
+    private File selectedImageFile = null;
     private int selectedProductId = -1;
+    private static final String IMAGES_DIR = "images";
 
     public ProductManagement() {
         setTitle("Product Management");
-        setSize(700, 450);
+        setSize(800, 500);
         setLocationRelativeTo(null);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout(10, 10));
 
-        model = new DefaultTableModel(new Object[]{"ID", "Name", "Description", "Price", "Stock"}, 0) {
+        // Create images directory if it doesn't exist
+        new File(IMAGES_DIR).mkdirs();
+
+        model = new DefaultTableModel(new Object[]{"ID", "Name", "Description", "Price", "Stock", "Image Path"}, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
                 return false;
@@ -37,7 +49,7 @@ public class ProductManagement extends JFrame {
         filterBtn = new JButton("Filter");
         filterPanel.add(filterBtn);
 
-        JPanel formPanel = new JPanel(new GridLayout(5, 2, 5, 5));
+        JPanel formPanel = new JPanel(new GridLayout(7, 2, 5, 5));
         formPanel.add(new JLabel("Name:"));
         nameField = new JTextField();
         formPanel.add(nameField);
@@ -53,6 +65,14 @@ public class ProductManagement extends JFrame {
         formPanel.add(new JLabel("Stock:"));
         stockField = new JTextField();
         formPanel.add(stockField);
+
+        formPanel.add(new JLabel("Image:"));
+        imageLabel = new JLabel("No image selected");
+        formPanel.add(imageLabel);
+
+        selectImageBtn = new JButton("Select Image");
+        formPanel.add(selectImageBtn);
+        formPanel.add(new JLabel()); // empty cell
 
         addBtn = new JButton("Add");
         updateBtn = new JButton("Update");
@@ -70,10 +90,12 @@ public class ProductManagement extends JFrame {
 
         loadProducts();
 
+        // Listeners
         addBtn.addActionListener(e -> addProduct());
         updateBtn.addActionListener(e -> updateProduct());
         deleteBtn.addActionListener(e -> deleteProduct());
         filterBtn.addActionListener(e -> filterProducts());
+        selectImageBtn.addActionListener(e -> selectImageFile());
 
         table.getSelectionModel().addListSelectionListener(e -> {
             int selectedRow = table.getSelectedRow();
@@ -83,10 +105,22 @@ public class ProductManagement extends JFrame {
                 descField.setText((String) model.getValueAt(selectedRow, 2));
                 priceField.setText(model.getValueAt(selectedRow, 3).toString());
                 stockField.setText(model.getValueAt(selectedRow, 4).toString());
+                String imgPath = (String) model.getValueAt(selectedRow, 5);
+                imageLabel.setText(imgPath == null ? "No image selected" : imgPath);
+                selectedImageFile = null; // reset; image path loaded from DB
             }
         });
 
         setVisible(true);
+    }
+
+    private void selectImageFile() {
+        JFileChooser fileChooser = new JFileChooser();
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            selectedImageFile = fileChooser.getSelectedFile();
+            imageLabel.setText(selectedImageFile.getName());
+        }
     }
 
     private Connection getConnection() throws SQLException {
@@ -99,7 +133,7 @@ public class ProductManagement extends JFrame {
 
     private void loadProducts(String filter) {
         model.setRowCount(0);
-        String sql = "SELECT id, name, description, price, stock FROM products";
+        String sql = "SELECT id, name, description, price, stock, image_path FROM products";
         if (filter != null && !filter.isEmpty()) {
             sql += " WHERE name LIKE ?";
         }
@@ -115,7 +149,8 @@ public class ProductManagement extends JFrame {
                         rs.getString("name"),
                         rs.getString("description"),
                         rs.getBigDecimal("price"),
-                        rs.getInt("stock")
+                        rs.getInt("stock"),
+                        rs.getString("image_path")
                 });
             }
         } catch (SQLException e) {
@@ -138,13 +173,23 @@ public class ProductManagement extends JFrame {
             double price = Double.parseDouble(priceStr);
             int stock = Integer.parseInt(stockStr);
 
-            String sql = "INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)";
+            // Copy image file if one was selected
+            String imageFileName = null;
+            if (selectedImageFile != null) {
+                imageFileName = selectedImageFile.getName();
+                Path source = selectedImageFile.toPath();
+                Path target = Paths.get(IMAGES_DIR, imageFileName);
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            String sql = "INSERT INTO products (name, description, price, stock, image_path) VALUES (?, ?, ?, ?, ?)";
             try (Connection conn = getConnection();
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, name);
                 stmt.setString(2, description);
                 stmt.setDouble(3, price);
                 stmt.setInt(4, stock);
+                stmt.setString(5, imageFileName);
                 stmt.executeUpdate();
                 loadProducts();
                 clearFields();
@@ -153,6 +198,8 @@ public class ProductManagement extends JFrame {
             JOptionPane.showMessageDialog(this, "Price must be a number and Stock must be an integer.");
         } catch (SQLException e) {
             showError(e);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Error copying image file: " + e.getMessage());
         }
     }
 
@@ -175,19 +222,44 @@ public class ProductManagement extends JFrame {
             double price = Double.parseDouble(priceStr);
             int stock = Integer.parseInt(stockStr);
 
-            String sql = "UPDATE products SET name = ?, description = ?, price = ?, stock = ? WHERE id = ?";
+            // Handle image file
+            String imageFileName = null;
+            if (selectedImageFile != null) {
+                imageFileName = selectedImageFile.getName();
+                Path source = selectedImageFile.toPath();
+                Path target = Paths.get(IMAGES_DIR, imageFileName);
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            // Update image_path only if a new image is selected
+            String sql;
+            if (selectedImageFile != null) {
+                sql = "UPDATE products SET name = ?, description = ?, price = ?, stock = ?, image_path = ? WHERE id = ?";
+            } else {
+                sql = "UPDATE products SET name = ?, description = ?, price = ?, stock = ? WHERE id = ?";
+            }
+
             try (Connection conn = getConnection();
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
+
                 stmt.setString(1, name);
                 stmt.setString(2, description);
                 stmt.setDouble(3, price);
                 stmt.setInt(4, stock);
-                stmt.setInt(5, selectedProductId);
+
+                if (selectedImageFile != null) {
+                    stmt.setString(5, imageFileName);
+                    stmt.setInt(6, selectedProductId);
+                } else {
+                    stmt.setInt(5, selectedProductId);
+                }
+
                 int rows = stmt.executeUpdate();
                 if (rows > 0) {
                     loadProducts();
                     clearFields();
                     selectedProductId = -1;
+                    selectedImageFile = null;
                 } else {
                     JOptionPane.showMessageDialog(this, "Product not found.");
                 }
@@ -196,6 +268,8 @@ public class ProductManagement extends JFrame {
             JOptionPane.showMessageDialog(this, "Price must be a number and Stock must be an integer.");
         } catch (SQLException e) {
             showError(e);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Error copying image file: " + e.getMessage());
         }
     }
 
@@ -204,30 +278,26 @@ public class ProductManagement extends JFrame {
             JOptionPane.showMessageDialog(this, "Select a product to delete.");
             return;
         }
-        int confirm = JOptionPane.showConfirmDialog(this, "Are you sure you want to delete this product?",
-                "Confirm Delete", JOptionPane.YES_NO_OPTION);
-        if (confirm != JOptionPane.YES_OPTION) return;
-
-        String sql = "DELETE FROM products WHERE id = ?";
-        try (Connection conn = getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setInt(1, selectedProductId);
-            int rows = stmt.executeUpdate();
-            if (rows > 0) {
+        int confirm = JOptionPane.showConfirmDialog(this, "Delete selected product?", "Confirm", JOptionPane.YES_NO_OPTION);
+        if (confirm == JOptionPane.YES_OPTION) {
+            String sql = "DELETE FROM products WHERE id = ?";
+            try (Connection conn = getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setInt(1, selectedProductId);
+                stmt.executeUpdate();
                 loadProducts();
                 clearFields();
                 selectedProductId = -1;
-            } else {
-                JOptionPane.showMessageDialog(this, "Product not found.");
+                selectedImageFile = null;
+            } catch (SQLException e) {
+                showError(e);
             }
-        } catch (SQLException e) {
-            showError(e);
         }
     }
 
     private void filterProducts() {
-        String filterText = filterField.getText().trim();
-        loadProducts(filterText);
+        String filter = filterField.getText().trim();
+        loadProducts(filter);
     }
 
     private void clearFields() {
@@ -235,10 +305,14 @@ public class ProductManagement extends JFrame {
         descField.setText("");
         priceField.setText("");
         stockField.setText("");
+        imageLabel.setText("No image selected");
+        selectedImageFile = null;
+        selectedProductId = -1;
         table.clearSelection();
     }
 
-    private void showError(Exception e) {
-        JOptionPane.showMessageDialog(this, "Error: " + e.getMessage(), "Database Error", JOptionPane.ERROR_MESSAGE);
+    private void showError(SQLException e) {
+        e.printStackTrace();
+        JOptionPane.showMessageDialog(this, "Database error: " + e.getMessage());
     }
 }
