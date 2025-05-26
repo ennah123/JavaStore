@@ -39,7 +39,8 @@ public class ClientDashboard extends JFrame {
         welcomeLabel.setBorder(BorderFactory.createEmptyBorder(15, 0, 15, 0));
         add(welcomeLabel, BorderLayout.NORTH);
 
-        productsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 20, 20));
+        productsPanel = new JPanel();
+        productsPanel.setLayout(new BoxLayout(productsPanel, BoxLayout.Y_AXIS));
         productsPanel.setBackground(new Color(245, 245, 245));
         productsScroll = new JScrollPane(productsPanel);
         productsScroll.setBorder(BorderFactory.createEmptyBorder());
@@ -97,10 +98,18 @@ public class ClientDashboard extends JFrame {
     private void loadProducts() {
         productsPanel.removeAll();
 
-        String sql = "SELECT id, name, description, price, stock, image_path FROM products";
+        String sql = """
+            SELECT p.id, p.name, p.description, p.price, p.stock, p.image_path, c.name AS category_name
+            FROM products p
+            JOIN categories c ON p.category_id = c.id
+            ORDER BY c.name, p.name
+        """;
+
         try (Connection conn = Database.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql);
              ResultSet rs = stmt.executeQuery()) {
+
+            Map<String, JPanel> categorySections = new LinkedHashMap<>();
 
             while (rs.next()) {
                 int id = rs.getInt("id");
@@ -109,10 +118,30 @@ public class ClientDashboard extends JFrame {
                 BigDecimal price = rs.getBigDecimal("price");
                 int stock = rs.getInt("stock");
                 String imagePath = rs.getString("image_path");
+                String categoryName = rs.getString("category_name");
+
+                JPanel categoryPanel = categorySections.get(categoryName);
+                if (categoryPanel == null) {
+                    categoryPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 20, 20));
+                    categoryPanel.setBackground(new Color(250, 250, 250));
+                    categoryPanel.setBorder(BorderFactory.createTitledBorder(
+                        BorderFactory.createLineBorder(new Color(180, 180, 180)),
+                        categoryName,
+                        TitledBorder.LEADING, TitledBorder.TOP,
+                        new Font("Segoe UI Semibold", Font.BOLD, 18),
+                        new Color(60, 60, 60)
+                    ));
+                    categorySections.put(categoryName, categoryPanel);
+                }
 
                 JPanel card = createProductCard(id, name, description, price, stock, imagePath);
-                productsPanel.add(card);
+                categoryPanel.add(card);
             }
+
+            for (JPanel panel : categorySections.values()) {
+                productsPanel.add(panel);
+            }
+
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error loading products: " + e.getMessage());
         }
@@ -172,17 +201,49 @@ public class ClientDashboard extends JFrame {
             JOptionPane.showMessageDialog(this, "Your panier is empty.");
             return;
         }
-
+    
+        String code = JOptionPane.showInputDialog(this, "Enter discount code (or leave blank):");
+        BigDecimal discountPercentage = BigDecimal.ZERO;
+        Integer discountId = null;
+    
         try (Connection conn = Database.getConnection()) {
             conn.setAutoCommit(false);
-
-            String insertOrderSql = "INSERT INTO orders (user_id, status) VALUES (?, ?)";
+    
+            if (code != null && !code.trim().isEmpty()) {
+                String discountSql = """
+                    SELECT id, percentage
+                    FROM discounts
+                    WHERE code = ? AND ? BETWEEN valid_from AND valid_to
+                """;
+    
+                try (PreparedStatement psDiscount = conn.prepareStatement(discountSql)) {
+                    psDiscount.setString(1, code.trim());
+                    psDiscount.setDate(2, new java.sql.Date(System.currentTimeMillis()));
+    
+                    ResultSet rs = psDiscount.executeQuery();
+                    if (rs.next()) {
+                        discountId = rs.getInt("id");
+                        discountPercentage = rs.getBigDecimal("percentage");
+                    } else {
+                        JOptionPane.showMessageDialog(this, "Invalid or expired discount code.");
+                    }
+                }
+            }
+    
+            String insertOrderSql = "INSERT INTO orders (user_id, status, discount_id) VALUES (?, ?, ?)";
             int orderId;
             try (PreparedStatement ps = conn.prepareStatement(insertOrderSql, Statement.RETURN_GENERATED_KEYS)) {
                 ps.setInt(1, userId);
                 ps.setString(2, "pending");
+    
+                if (discountId != null) {
+                    ps.setInt(3, discountId);
+                } else {
+                    ps.setNull(3, Types.INTEGER);
+                }
+    
                 ps.executeUpdate();
-
+    
                 ResultSet keys = ps.getGeneratedKeys();
                 if (keys.next()) {
                     orderId = keys.getInt(1);
@@ -190,27 +251,33 @@ public class ClientDashboard extends JFrame {
                     throw new SQLException("Failed to get order ID.");
                 }
             }
-
+    
             String insertItemSql = "INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?)";
             String updateStockSql = "UPDATE products SET stock = stock - ? WHERE id = ?";
+    
             for (CartItem item : cart.values()) {
                 try (PreparedStatement psItem = conn.prepareStatement(insertItemSql);
                      PreparedStatement psStock = conn.prepareStatement(updateStockSql)) {
-
+    
+                    BigDecimal priceToUse = item.price;
+                    if (discountPercentage.compareTo(BigDecimal.ZERO) > 0) {
+                        priceToUse = priceToUse.subtract(priceToUse.multiply(discountPercentage).divide(BigDecimal.valueOf(100)));
+                    }
+    
                     psItem.setInt(1, orderId);
                     psItem.setInt(2, item.productId);
                     psItem.setInt(3, item.quantity);
-                    psItem.setBigDecimal(4, item.price);
+                    psItem.setBigDecimal(4, priceToUse);
                     psItem.executeUpdate();
-
+    
                     psStock.setInt(1, item.quantity);
                     psStock.setInt(2, item.productId);
                     psStock.executeUpdate();
                 }
             }
-
+    
             conn.commit();
-
+    
             JOptionPane.showMessageDialog(this, "Order placed successfully!");
             cart.clear();
             refreshCartList();
@@ -242,7 +309,7 @@ public class ClientDashboard extends JFrame {
 
             if (imagePath != null && !imagePath.isEmpty()) {
                 try {
-                    ImageIcon icon = new ImageIcon(getClass().getResource("/images/"+imagePath));
+                    ImageIcon icon = new ImageIcon(getClass().getResource("/images/" + imagePath));
                     Image img = icon.getImage().getScaledInstance(260, 100, Image.SCALE_SMOOTH);
                     imageLabel.setIcon(new ImageIcon(img));
                 } catch (Exception e) {
@@ -306,6 +373,7 @@ public class ClientDashboard extends JFrame {
                     setBorder(HOVER_BORDER);
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                 }
+
                 @Override
                 public void mouseExited(MouseEvent e) {
                     setBackground(BASE_BG);

@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.sql.*;
+import java.util.Vector;
 
 public class ProductManagement extends JFrame {
     private JTable table;
@@ -19,21 +20,21 @@ public class ProductManagement extends JFrame {
     private JTextField nameField, descField, priceField, stockField, filterField;
     private JButton addBtn, updateBtn, deleteBtn, filterBtn, selectImageBtn;
     private JLabel imageLabel;
+    private JComboBox<String> categoryCombo;
     private File selectedImageFile = null;
     private int selectedProductId = -1;
     private static final String IMAGES_DIR = "images";
 
     public ProductManagement() {
         setTitle("Product Management");
-        setSize(800, 500);
+        setSize(900, 550);
         setLocationRelativeTo(null);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout(10, 10));
 
-        // Create images directory if it doesn't exist
         new File(IMAGES_DIR).mkdirs();
 
-        model = new DefaultTableModel(new Object[]{"ID", "Name", "Description", "Price", "Stock", "Image Path"}, 0) {
+        model = new DefaultTableModel(new Object[]{"ID", "Name", "Description", "Price", "Stock", "Image Path", "Category"}, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
                 return false;
@@ -49,7 +50,7 @@ public class ProductManagement extends JFrame {
         filterBtn = new JButton("Filter");
         filterPanel.add(filterBtn);
 
-        JPanel formPanel = new JPanel(new GridLayout(7, 2, 5, 5));
+        JPanel formPanel = new JPanel(new GridLayout(8, 2, 5, 5));
         formPanel.add(new JLabel("Name:"));
         nameField = new JTextField();
         formPanel.add(nameField);
@@ -66,13 +67,18 @@ public class ProductManagement extends JFrame {
         stockField = new JTextField();
         formPanel.add(stockField);
 
+        formPanel.add(new JLabel("Category:"));
+        categoryCombo = new JComboBox<>();
+        loadCategories();
+        formPanel.add(categoryCombo);
+
         formPanel.add(new JLabel("Image:"));
         imageLabel = new JLabel("No image selected");
         formPanel.add(imageLabel);
 
         selectImageBtn = new JButton("Select Image");
         formPanel.add(selectImageBtn);
-        formPanel.add(new JLabel()); // empty cell
+        formPanel.add(new JLabel());
 
         addBtn = new JButton("Add");
         updateBtn = new JButton("Update");
@@ -90,7 +96,6 @@ public class ProductManagement extends JFrame {
 
         loadProducts();
 
-        // Listeners
         addBtn.addActionListener(e -> addProduct());
         updateBtn.addActionListener(e -> updateProduct());
         deleteBtn.addActionListener(e -> deleteProduct());
@@ -107,11 +112,23 @@ public class ProductManagement extends JFrame {
                 stockField.setText(model.getValueAt(selectedRow, 4).toString());
                 String imgPath = (String) model.getValueAt(selectedRow, 5);
                 imageLabel.setText(imgPath == null ? "No image selected" : imgPath);
-                selectedImageFile = null; // reset; image path loaded from DB
+                selectedImageFile = null;
+                categoryCombo.setSelectedItem(model.getValueAt(selectedRow, 6));
             }
         });
 
         setVisible(true);
+    }
+
+    private void loadCategories() {
+        try (Connection conn = getConnection(); Statement stmt = conn.createStatement()) {
+            ResultSet rs = stmt.executeQuery("SELECT name FROM categories");
+            while (rs.next()) {
+                categoryCombo.addItem(rs.getString("name"));
+            }
+        } catch (SQLException e) {
+            showError(e);
+        }
     }
 
     private void selectImageFile() {
@@ -133,9 +150,10 @@ public class ProductManagement extends JFrame {
 
     private void loadProducts(String filter) {
         model.setRowCount(0);
-        String sql = "SELECT id, name, description, price, stock, image_path FROM products";
+        String sql = "SELECT p.id, p.name, p.description, p.price, p.stock, p.image_path, c.name AS category_name " +
+                     "FROM products p LEFT JOIN categories c ON p.category_id = c.id";
         if (filter != null && !filter.isEmpty()) {
-            sql += " WHERE name LIKE ?";
+            sql += " WHERE p.name LIKE ?";
         }
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -145,16 +163,29 @@ public class ProductManagement extends JFrame {
             ResultSet rs = stmt.executeQuery();
             while (rs.next()) {
                 model.addRow(new Object[]{
-                        rs.getInt("id"),
-                        rs.getString("name"),
-                        rs.getString("description"),
-                        rs.getBigDecimal("price"),
-                        rs.getInt("stock"),
-                        rs.getString("image_path")
+                    rs.getInt("id"),
+                    rs.getString("name"),
+                    rs.getString("description"),
+                    rs.getBigDecimal("price"),
+                    rs.getInt("stock"),
+                    rs.getString("image_path"),
+                    rs.getString("category_name")
                 });
             }
         } catch (SQLException e) {
             showError(e);
+        }
+    }
+
+    private Integer getCategoryIdByName(String name) throws SQLException {
+        String sql = "SELECT id FROM categories WHERE name = ?";
+        try (Connection conn = getConnection(); PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, name);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                return rs.getInt("id");
+            }
+            return null;
         }
     }
 
@@ -172,8 +203,6 @@ public class ProductManagement extends JFrame {
         try {
             double price = Double.parseDouble(priceStr);
             int stock = Integer.parseInt(stockStr);
-
-            // Copy image file if one was selected
             String imageFileName = null;
             if (selectedImageFile != null) {
                 imageFileName = selectedImageFile.getName();
@@ -182,24 +211,28 @@ public class ProductManagement extends JFrame {
                 Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            String sql = "INSERT INTO products (name, description, price, stock, image_path) VALUES (?, ?, ?, ?, ?)";
-            try (Connection conn = getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+            Integer categoryId = getCategoryIdByName((String) categoryCombo.getSelectedItem());
+
+            String sql = "INSERT INTO products (name, description, price, stock, image_path, category_id) VALUES (?, ?, ?, ?, ?, ?)";
+            try (Connection conn = getConnection(); PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, name);
                 stmt.setString(2, description);
                 stmt.setDouble(3, price);
                 stmt.setInt(4, stock);
                 stmt.setString(5, imageFileName);
+                if (categoryId != null) {
+                    stmt.setInt(6, categoryId);
+                } else {
+                    stmt.setNull(6, Types.INTEGER);
+                }
                 stmt.executeUpdate();
                 loadProducts();
                 clearFields();
             }
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(this, "Price must be a number and Stock must be an integer.");
-        } catch (SQLException e) {
-            showError(e);
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error copying image file: " + e.getMessage());
+        } catch (SQLException | IOException e) {
+            showError(new SQLException(e));
         }
     }
 
@@ -221,8 +254,6 @@ public class ProductManagement extends JFrame {
         try {
             double price = Double.parseDouble(priceStr);
             int stock = Integer.parseInt(stockStr);
-
-            // Handle image file
             String imageFileName = null;
             if (selectedImageFile != null) {
                 imageFileName = selectedImageFile.getName();
@@ -231,45 +262,38 @@ public class ProductManagement extends JFrame {
                 Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            // Update image_path only if a new image is selected
+            Integer categoryId = getCategoryIdByName((String) categoryCombo.getSelectedItem());
+
             String sql;
             if (selectedImageFile != null) {
-                sql = "UPDATE products SET name = ?, description = ?, price = ?, stock = ?, image_path = ? WHERE id = ?";
+                sql = "UPDATE products SET name = ?, description = ?, price = ?, stock = ?, image_path = ?, category_id = ? WHERE id = ?";
             } else {
-                sql = "UPDATE products SET name = ?, description = ?, price = ?, stock = ? WHERE id = ?";
+                sql = "UPDATE products SET name = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?";
             }
 
-            try (Connection conn = getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(sql)) {
-
+            try (Connection conn = getConnection(); PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, name);
                 stmt.setString(2, description);
                 stmt.setDouble(3, price);
                 stmt.setInt(4, stock);
-
                 if (selectedImageFile != null) {
                     stmt.setString(5, imageFileName);
+                    stmt.setInt(6, categoryId != null ? categoryId : Types.INTEGER);
+                    stmt.setInt(7, selectedProductId);
+                } else {
+                    stmt.setInt(5, categoryId != null ? categoryId : Types.INTEGER);
                     stmt.setInt(6, selectedProductId);
-                } else {
-                    stmt.setInt(5, selectedProductId);
                 }
-
-                int rows = stmt.executeUpdate();
-                if (rows > 0) {
-                    loadProducts();
-                    clearFields();
-                    selectedProductId = -1;
-                    selectedImageFile = null;
-                } else {
-                    JOptionPane.showMessageDialog(this, "Product not found.");
-                }
+                stmt.executeUpdate();
+                loadProducts();
+                clearFields();
+                selectedProductId = -1;
+                selectedImageFile = null;
             }
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(this, "Price must be a number and Stock must be an integer.");
-        } catch (SQLException e) {
-            showError(e);
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error copying image file: " + e.getMessage());
+        } catch (SQLException | IOException e) {
+            showError(new SQLException(e));
         }
     }
 
@@ -281,8 +305,7 @@ public class ProductManagement extends JFrame {
         int confirm = JOptionPane.showConfirmDialog(this, "Delete selected product?", "Confirm", JOptionPane.YES_NO_OPTION);
         if (confirm == JOptionPane.YES_OPTION) {
             String sql = "DELETE FROM products WHERE id = ?";
-            try (Connection conn = getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+            try (Connection conn = getConnection(); PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setInt(1, selectedProductId);
                 stmt.executeUpdate();
                 loadProducts();
@@ -309,6 +332,7 @@ public class ProductManagement extends JFrame {
         selectedImageFile = null;
         selectedProductId = -1;
         table.clearSelection();
+        categoryCombo.setSelectedIndex(0);
     }
 
     private void showError(SQLException e) {
